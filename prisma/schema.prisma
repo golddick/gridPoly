@@ -1,0 +1,167 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  email        String   @unique
+  country      String?
+  authProvider String
+  createdAt    DateTime @default(now())
+
+  // Global leaderboard — tracked across every room this user has played in,
+  // updated when a game ends, independent of any single room.
+  bestNetWorth   Int       @default(0)
+  bestNetWorthAt DateTime?
+  gamesWon       Int       @default(0)
+  gamesPlayed    Int       @default(0)
+
+  wallet       Wallet?
+  roomPlayers  RoomPlayer[]
+  hostedRooms  Room[]       @relation("RoomHost")
+}
+
+model Wallet {
+  id           String        @id @default(cuid())
+  userId       String        @unique
+  balance      Int           @default(0)
+  currency     String        @default("DEMO") // "DEMO" now, "USD" | "NGN" later
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+}
+
+model Transaction {
+  id             String   @id @default(cuid())
+  walletId       String
+  type           String // deposit | withdrawal | buy | sell | rent | contract_payout | loan
+  amount         Int
+  relatedAssetId String?
+  roomId         String?
+  timestamp      DateTime @default(now())
+  wallet         Wallet   @relation(fields: [walletId], references: [id])
+}
+
+model Room {
+  id        String   @id @default(cuid())
+  hostId    String
+  status    String   @default("waiting") // waiting | in_progress | ended
+  settings  Json
+  createdAt DateTime @default(now())
+  startedAt DateTime?
+  endsAt    DateTime?
+
+  host          User           @relation("RoomHost", fields: [hostId], references: [id])
+  players       RoomPlayer[]
+  marketEvents  MarketEvent[]
+  gameActions   GameAction[]
+  betPlacements BetPlacement[]
+}
+
+model RoomPlayer {
+  id            String       @id @default(cuid())
+  roomId        String
+  userId        String
+  inGameBalance Int
+  position      Int          @default(0)
+  status        String       @default("active") // active | bankrupt | disconnected
+  netWorth      Int          @default(0)
+  pieceId       String       @default("cone-gold")
+
+  room        Room         @relation(fields: [roomId], references: [id])
+  user        User         @relation(fields: [userId], references: [id])
+  ownedAssets OwnedAsset[]
+  loans       Loan[]
+  gameActions GameAction[]
+
+  @@unique([roomId, userId])
+}
+
+model AssetDefinition {
+  id             String  @id @default(cuid())
+  boardVariantId String
+  type           String // property | tech_company | contract | betting | crypto | startup | bond
+  name           String
+  basePrice      Int
+  currentValue   Int // live market value, shared across all investors — rent/fees/payouts derive from this
+  boardPosition  Int?
+  volatility     Float   @default(0) // 0–1
+  baseIncomeRate Int     @default(0)
+  landingFeePercent Float @default(0) // % of currentValue charged when a non-investor declines to buy/invest/bet
+
+  ownedAssets  OwnedAsset[]
+  betPlacements BetPlacement[]
+}
+
+model OwnedAsset {
+  id                String @id @default(cuid())
+  roomPlayerId      String
+  assetDefinitionId String
+  amountInvested    Int // total this player has put in — supports multiple players holding the same asset
+  ownershipPercent  Float  @default(100) // amountInvested ÷ sum of all players' amountInvested in this asset
+  status            String @default("active") // active | contested | expired
+
+  roomPlayer      RoomPlayer      @relation(fields: [roomPlayerId], references: [id])
+  assetDefinition AssetDefinition @relation(fields: [assetDefinitionId], references: [id])
+}
+
+model BetPlacement {
+  id                String   @id @default(cuid())
+  roomId            String
+  assetDefinitionId String // the Betting Company tile
+  bettorRoomPlayerId String
+  ownerRoomPlayerId  String
+  betType            String // color | range | number
+  betAmount          Int // player-chosen stake — determines the payout if they win
+  multiplier         Float // 2x / 3x / 35x depending on betType
+  result             String // win | lose
+  payoutAmount       Int
+  timestamp          DateTime @default(now())
+
+  room            Room            @relation(fields: [roomId], references: [id])
+  assetDefinition AssetDefinition @relation(fields: [assetDefinitionId], references: [id])
+}
+
+model MarketEvent {
+  id               String   @id @default(cuid())
+  roomId           String
+  triggeredAtTurn  Int
+  affectedAssetType String
+  impactPercent    Float
+  description      String
+
+  room Room @relation(fields: [roomId], references: [id])
+}
+
+model Loan {
+  id                       String   @id @default(cuid())
+  roomPlayerId             String
+  principal                Int
+  interestRate             Float
+  installmentAmount        Int
+  installmentIntervalTurns Int
+  installmentsRemaining    Int
+  missedPayments           Int      @default(0)
+  status                   String   @default("active") // active | paid_off | defaulted
+  createdAtTurn            Int
+
+  roomPlayer RoomPlayer @relation(fields: [roomPlayerId], references: [id])
+}
+
+model GameAction {
+  id           String   @id @default(cuid())
+  roomId       String
+  roomPlayerId String
+  turnNumber   Int
+  actionType   String // roll | buy | auction_bid | outbid_contract | pay_rent | trigger_event | go_bankrupt
+  payload      Json
+  timestamp    DateTime @default(now())
+
+  room       Room       @relation(fields: [roomId], references: [id])
+  roomPlayer RoomPlayer @relation(fields: [roomPlayerId], references: [id])
+}
