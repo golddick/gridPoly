@@ -33,6 +33,7 @@ interface GameStore {
   leave: () => void;
   choosePiece: (pieceId: string) => void;
   start: () => void;
+  endGame: () => void;
   roll: () => void;
   buyDecision: (accept: boolean) => void;
   outbidDecision: (accept: boolean) => void;
@@ -141,6 +142,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { roomId } = get();
     if (!roomId) return;
     getSocket().emit("room:start", { roomId });
+  },
+
+  endGame: () => {
+    const { roomId } = get();
+    if (!roomId) return;
+    getSocket().emit("game:endGame", { roomId });
   },
 
   roll: () => {
@@ -290,6 +297,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
 
 
+
+
 // "use client";
 
 // import { create } from "zustand";
@@ -309,6 +318,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 //   hostUserId: string;
 //   settings: RoomSettings;
 //   game: GameState | null;
+//   actionDeadline: number | null;
 // }
 
 // interface GameStore {
@@ -574,3 +584,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
 //     getSocket().emit("chat:send", { roomId, toPlayerId, message });
 //   },
 // }));
+
+
+
+

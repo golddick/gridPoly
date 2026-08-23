@@ -1,3 +1,8 @@
+
+
+
+
+
 // "use client";
 
 // import { useEffect, useMemo, useRef } from "react";
@@ -396,10 +401,14 @@
 //   const currentPos = useRef(targetPosition);
 //   const scale = inJail ? 0.6 : 1;
 
+//   const TILE_SURFACE_Y = 0.04; // top of the tile base mesh (boxGeometry height 0.04, centered at y=0.02)
+//   const CONE_HEIGHT = 0.26;
+//   const restY = TILE_SURFACE_Y + (CONE_HEIGHT / 2) * scale; // cone's own center, so its base actually touches the tile
+
 //   const worldPos = (pos: number) => {
 //     const [gx, gy] = tileLayoutPosition(pos, total, side);
 //     const jailOffset = inJail && pos === jailPosition(side) ? -0.08 : 0;
-//     return new THREE.Vector3(gx * spacing + offset, 0.45 * scale, gy * spacing + jailOffset);
+//     return new THREE.Vector3(gx * spacing + offset, restY, gy * spacing + jailOffset);
 //   };
 
 //   useEffect(() => {
@@ -421,7 +430,7 @@
 //       const to = worldPos(path.current[hopIndex.current]);
 //       const eased = hopProgress.current;
 //       mesh.position.lerpVectors(from, to, eased);
-//       mesh.position.y = from.y + Math.sin(eased * Math.PI) * 0.28; // arc bump
+//       mesh.position.y = from.y + Math.sin(eased * Math.PI) * 0.16; // arc bump — proportionate to resting near the tile surface
 //       mesh.rotation.x = Math.sin(eased * Math.PI) * 0.6; // forward tumble
 
 //       if (hopProgress.current >= 1) {
@@ -554,7 +563,7 @@
 // }) {
 //   const distance = boardHalf + spacing * 0.5;
 //   const length = boardHalf * 2 + spacing * 0.85;
-//   const height = spacing * 0.32;
+//   const height = spacing * 0.12; // low, curb-height band — level with the board, not a tall enclosing wall
 
 //   const texture = useMemo(() => tickerTexture(messages, color, background), [messages, color, background]);
 
@@ -757,6 +766,19 @@
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
@@ -818,11 +840,12 @@ const HOTEL_CAP = new THREE.ConeGeometry(0.17, 0.14, 4);
 const FLAG_POLE = new THREE.CylinderGeometry(0.008, 0.008, 0.18, 6);
 const FLAG = new THREE.PlaneGeometry(0.08, 0.05);
 
-function labelForTile(tile: { type: TileType; name: string; basePrice: number }, value: number) {
+function labelForTile(tile: { type: TileType; name: string; basePrice: number; groupColor?: string }, value: number) {
   const isCorner = tile.type === "go" || tile.type === "jail" || tile.type === "exchange_floor" || tile.type === "go_to_jail";
   if (isCorner) return cornerLabelTexture(CORNER_NAMES[tile.type] ?? tile.name, TILE_COLOR[tile.type]);
   const subtitle = value > 0 ? `$${value.toLocaleString()}` : "";
-  return tileLabelTexture(tile.name, subtitle, TILE_COLOR[tile.type]);
+  const accent = tile.groupColor ?? TILE_COLOR[tile.type];
+  return tileLabelTexture(tile.name, subtitle, accent);
 }
 
 function PropertyStructure({ buildLevel = 0, gold = false }: { buildLevel?: number; gold?: boolean }) {
@@ -1078,7 +1101,7 @@ function Tile({
   onHover,
   onSelect,
 }: {
-  tile: { id: string; type: TileType; name: string; basePrice: number };
+  tile: { id: string; type: TileType; name: string; basePrice: number; groupColor?: string };
   spacing: number;
   gx: number;
   gy: number;
@@ -1114,12 +1137,15 @@ function Tile({
         <planeGeometry args={[spacing * 0.62, spacing * 0.62]} />
         <meshStandardMaterial map={texture} transparent opacity={mortgaged ? 0.45 : 1} roughness={0.7} />
       </mesh>
-      {/* Per-tile structures (houses, wheel, tower, etc.) commented out — they visually
-          collided with player tokens landing on the same tile, causing confusion between
-          the tile's own "piece" and the player's piece. The flat tile + printed label
-          (name/price) is enough to read the tile; re-enable if tokens get their own
-          dedicated parking spot offset away from tile center.
-      {!mortgaged && <TileStructure tile={tile} buildLevel={visual?.buildLevel} />} */}
+      {/* Only show a structure once a property/estate is actually built — this is a
+          meaningful gameplay signal players need to see. Every other decorative
+          structure (betting wheel, tech tower, crypto crystal, rocket, vault, cards,
+          jail cage) stays off since those visually collided with player tokens
+          landing on the same tile. The flag-pole placeholder for an unbuilt
+          property is also skipped for the same reason. */}
+      {!mortgaged && (tile.type === "property" || tile.type === "estate") && (visual?.buildLevel ?? 0) > 0 && (
+        <TileStructure tile={tile} buildLevel={visual?.buildLevel} />
+      )}
       {visual?.forSalePrice ? (
         <mesh position={[spacing * 0.3, 0.4, spacing * 0.3]}>
           <sphereGeometry args={[0.045, 8, 8]} />
@@ -1155,7 +1181,7 @@ function Token({
   const currentPos = useRef(targetPosition);
   const scale = inJail ? 0.6 : 1;
 
-  const TILE_SURFACE_Y = 0.04; // top of the tile base mesh (boxGeometry height 0.04, centered at y=0.02)
+  const TILE_SURFACE_Y = 0.06; // top of the tile base mesh (boxGeometry height 0.04, centered at y=0.02)
   const CONE_HEIGHT = 0.26;
   const restY = TILE_SURFACE_Y + (CONE_HEIGHT / 2) * scale; // cone's own center, so its base actually touches the tile
 
@@ -1166,11 +1192,24 @@ function Token({
   };
 
   useEffect(() => {
-    if (targetPosition === currentPos.current) return;
-    const walkable = isWalkableHop(currentPos.current, targetPosition, total);
-    path.current = walkable ? hopPath(currentPos.current, targetPosition, total) : [targetPosition];
-    hopIndex.current = 0;
-    hopProgress.current = 0;
+    const isAnimating = hopProgress.current < 1 && hopIndex.current < path.current.length;
+    // If mid-hop, chain from wherever the queued path will actually end up —
+    // never recompute from a stale reference, or the hop count could stop
+    // matching the real distance traveled.
+    const effectiveFrom = isAnimating ? path.current[path.current.length - 1] : currentPos.current;
+    if (targetPosition === effectiveFrom) return;
+
+    const walkable = isWalkableHop(effectiveFrom, targetPosition, total);
+    const newLeg = walkable ? hopPath(effectiveFrom, targetPosition, total) : [targetPosition];
+
+    if (isAnimating) {
+      path.current = [...path.current, ...newLeg]; // extend the queue seamlessly, don't interrupt the current hop
+    } else {
+      currentPos.current = effectiveFrom;
+      path.current = newLeg;
+      hopIndex.current = 0;
+      hopProgress.current = 0;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [targetPosition]);
 
@@ -1508,28 +1547,3 @@ export default function Board3D({
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

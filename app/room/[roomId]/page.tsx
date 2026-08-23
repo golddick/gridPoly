@@ -13,7 +13,7 @@ import TurnTimer from "@/components/TurnTimer";
 import { useGameStore } from "@/lib/store";
 import { normalizeRoomCode } from "@/lib/roomCode";
 import { boardIndex } from "@/lib/game/board";
-import { getPlayerAssets } from "@/lib/game/engine";
+import { getPlayerAssets, getColorGroupStatus } from "@/lib/game/engine";
 import { BET_MULTIPLIERS, type BetType } from "@/lib/game/types";
 import { useGridAuth } from "@/lib/auth";
 
@@ -38,6 +38,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
     leave,
     choosePiece,
     start,
+    endGame,
     roll,
     buyDecision,
     outbidDecision,
@@ -78,6 +79,9 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
   const [listPriceInput, setListPriceInput] = useState<Record<string, number>>({});
   const [selectedPieceId, setSelectedPieceId] = useState<string | null>(null);
   const [auctionBidInput, setAuctionBidInput] = useState(0);
+  const [dismissedTradeNoticeId, setDismissedTradeNoticeId] = useState<string | null>(null);
+  const [dismissedChatNoticeId, setDismissedChatNoticeId] = useState<string | null>(null);
+  const [endGameConfirmOpen, setEndGameConfirmOpen] = useState(false);
 
   useEffect(() => {
     if (!userId) return;
@@ -109,6 +113,12 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
   const isMyAuctionTurn = auction && auction.currentTurnPlayerId === myPlayerId;
 
   const unreadDms = chatMessages.filter((m) => m.toPlayerId === myPlayerId).length;
+
+  const incomingTrade = game?.trades.find((t) => t.status === "pending" && t.toPlayerId === myPlayerId) ?? null;
+  const showTradeNotice = Boolean(incomingTrade && incomingTrade.id !== dismissedTradeNoticeId && !tradeOpen);
+
+  const latestIncomingChat = [...chatMessages].reverse().find((m) => m.toPlayerId === myPlayerId && m.fromPlayerId !== myPlayerId) ?? null;
+  const showChatNotice = Boolean(latestIncomingChat && latestIncomingChat.id !== dismissedChatNoticeId && !chatOpen);
 
   if (authLoading || !userId) {
     return (
@@ -247,23 +257,22 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
           <Link href="/leaderboard" className="hidden text-xs text-cream/50 hover:text-cream sm:inline">
             Leaderboard
           </Link>
+          {isHost && (
+            <button
+              onClick={() => setEndGameConfirmOpen(true)}
+              className="rounded-full border border-danger/40 px-3 py-1.5 text-xs text-danger hover:bg-danger/10"
+            >
+              End game
+            </button>
+          )}
           <HowToPlayButton />
         </div>
       </header>
 
       <div className="grid flex-1 grid-cols-1 lg:grid-cols-[1fr_320px]">
         <section className="relative min-h-[360px] sm:min-h-[420px]">
-          
           <Board3D
             game={game}
-            ticker={{
-              messages: ["Custom announcement", "Anything you want"], // omit to use the live game log
-              enabled: true,          // set false to hide entirely
-              color: "#F0B94A",       // text glow color
-              background: "#14120F",  // panel background
-              bezelColor: "#14120F",  // frame color
-              speed: 0.05,            // scroll speed
-            }}
             onHoverTile={setHoveredTileId}
             onSelectTile={(id) => setSelectedTileId((cur) => (cur === id ? null : id))}
           />
@@ -317,11 +326,22 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
                     </div>
                     {a.isSingleOwner && isMyTurn && !pending && !auction && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5">
-                        {(a.type === "property" || a.type === "estate") && (a.buildLevel ?? 0) < 5 && !a.mortgaged && (
-                          <button onClick={() => build(a.tileId)} className="rounded border border-gold/40 px-1.5 py-0.5 text-[10px] text-gold-highlight hover:bg-gold/10">
-                            Build
-                          </button>
-                        )}
+                        {(a.type === "property" || a.type === "estate") && (a.buildLevel ?? 0) < 5 && !a.mortgaged && (() => {
+                          const groupStatus = getColorGroupStatus(game, a.tileId, myPlayerId);
+                          const canBuild = !groupStatus || groupStatus.ownsAll;
+                          return canBuild ? (
+                            <button onClick={() => build(a.tileId)} className="rounded border border-gold/40 px-1.5 py-0.5 text-[10px] text-gold-highlight hover:bg-gold/10">
+                              Build
+                            </button>
+                          ) : (
+                            <span
+                              className="rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-cream/40"
+                              title="Own every property in this color group first"
+                            >
+                              Need {groupStatus.total - groupStatus.ownedByPlayer} more of set to build
+                            </span>
+                          );
+                        })()}
                         {!a.mortgaged ? (
                           <button onClick={() => mortgage(a.tileId)} className="rounded border border-white/15 px-1.5 py-0.5 text-[10px] text-cream/60 hover:border-white/30">
                             Mortgage
@@ -616,9 +636,86 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
           onRespond={respondTrade}
         />
       )}
+
+      {/* Host: confirm before ending the game early */}
+      <Modal open={endGameConfirmOpen} onClose={() => setEndGameConfirmOpen(false)} title="End the game?">
+        <p className="text-sm text-cream/70">
+          This ends the game immediately for everyone. Whoever has the highest net worth right now wins.
+        </p>
+        <div className="mt-6 flex gap-3">
+          <button
+            onClick={() => {
+              endGame();
+              setEndGameConfirmOpen(false);
+            }}
+            className="flex-1 rounded-full bg-danger py-2.5 text-sm font-semibold text-cream hover:bg-danger/80"
+          >
+            End game now
+          </button>
+          <button
+            onClick={() => setEndGameConfirmOpen(false)}
+            className="flex-1 rounded-full border border-cream/25 py-2.5 text-sm text-cream hover:border-cream/50"
+          >
+            Cancel
+          </button>
+        </div>
+      </Modal>
+
+      {/* Popup notices — appear as soon as something arrives, whether or not Trade/Chat happen to be open */}
+      <div className="pointer-events-none fixed inset-x-0 top-4 z-50 flex flex-col items-center gap-2 px-4">
+        {showTradeNotice && incomingTrade && (
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-gold/40 bg-[#181B1F] px-4 py-2 text-xs text-cream shadow-lg">
+            <span>
+              <span className="text-gold-highlight">{game.players[incomingTrade.fromPlayerId]?.username}</span> sent you a trade offer
+            </span>
+            <button
+              onClick={() => {
+                setTradeOpen(true);
+                setDismissedTradeNoticeId(incomingTrade.id);
+              }}
+              className="rounded-full bg-gold px-3 py-1 font-semibold text-base hover:bg-gold-highlight"
+            >
+              View
+            </button>
+            <button onClick={() => setDismissedTradeNoticeId(incomingTrade.id)} className="text-cream/40 hover:text-cream/70">
+              ✕
+            </button>
+          </div>
+        )}
+        {showChatNotice && latestIncomingChat && (
+          <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-primary-accent/40 bg-[#181B1F] px-4 py-2 text-xs text-cream shadow-lg">
+            <span>
+              <span className="text-primary-accent">{latestIncomingChat.fromUsername}</span>: {latestIncomingChat.message.slice(0, 60)}
+            </span>
+            <button
+              onClick={() => {
+                setChatOpen(true);
+                setDismissedChatNoticeId(latestIncomingChat.id);
+              }}
+              className="rounded-full bg-primary-accent px-3 py-1 font-semibold text-base hover:bg-primary"
+            >
+              View
+            </button>
+            <button onClick={() => setDismissedChatNoticeId(latestIncomingChat.id)} className="text-cream/40 hover:text-cream/70">
+              ✕
+            </button>
+          </div>
+        )}
+      </div>
     </main>
   );
 }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -641,6 +738,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 // import Chat from "@/components/Chat";
 // import TradePanel from "@/components/TradePanel";
 // import PieceSelector from "@/components/PieceSelector";
+// import TurnTimer from "@/components/TurnTimer";
 // import { useGameStore } from "@/lib/store";
 // import { normalizeRoomCode } from "@/lib/roomCode";
 // import { boardIndex } from "@/lib/game/board";
@@ -864,9 +962,10 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 //           <span className="ml-2 text-xs text-cream/40 sm:ml-3">Turn {game.turnNumber}</span>
 //         </div>
 //         <div className="flex items-center gap-2 sm:gap-4">
-//           <span className="hidden text-sm text-cream/70 sm:inline">
+//           <span className={`text-xs sm:text-sm ${isMyTurn ? "font-semibold text-gold-highlight" : "text-cream/70"}`}>
 //             {isMyTurn ? "Your turn" : `${game.players[game.playerOrder[game.currentPlayerIndex]].username}'s turn`}
 //           </span>
+//           <TurnTimer deadline={snapshot?.actionDeadline ?? null} />
 //           <button onClick={() => setTradeOpen(true)} className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-cream/70 hover:border-white/25">
 //             Trade
 //           </button>
@@ -883,8 +982,17 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 
 //       <div className="grid flex-1 grid-cols-1 lg:grid-cols-[1fr_320px]">
 //         <section className="relative min-h-[360px] sm:min-h-[420px]">
+          
 //           <Board3D
 //             game={game}
+//             ticker={{
+//               messages: ["Custom announcement", "Anything you want"], // omit to use the live game log
+//               enabled: true,          // set false to hide entirely
+//               color: "#F0B94A",       // text glow color
+//               background: "#14120F",  // panel background
+//               bezelColor: "#14120F",  // frame color
+//               speed: 0.05,            // scroll speed
+//             }}
 //             onHoverTile={setHoveredTileId}
 //             onSelectTile={(id) => setSelectedTileId((cur) => (cur === id ? null : id))}
 //           />
@@ -1240,3 +1348,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 //     </main>
 //   );
 // }
+
+
+
+
