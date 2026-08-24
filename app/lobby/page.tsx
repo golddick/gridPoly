@@ -3,25 +3,13 @@
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 // "use client";
 
 // import { useState, type FormEvent } from "react";
 // import { useRouter } from "next/navigation";
 // import Link from "next/link";
 // import HowToPlayButton from "@/components/HowToPlayButton";
+// import { isValidRoomCode, normalizeRoomCode } from "@/lib/roomCode";
 // import type { RoomSettings, WinCondition } from "@/lib/game/types";
 // import { useGridAuth } from "@/lib/auth";
 
@@ -201,6 +189,69 @@
 //   );
 // }
 
+// /**
+//  * For an invited player (or the host, on another device) who already has a
+//  * room code — validates it against the server before navigating, so a typo
+//  * shows an inline error instead of landing on a dead room page.
+//  */
+// function JoinRoomPanel({ userId }: { userId: string | null }) {
+//   const router = useRouter();
+//   const [code, setCode] = useState("");
+//   const [joining, setJoining] = useState(false);
+//   const [error, setError] = useState<string | null>(null);
+
+//   async function handleJoin(e: FormEvent) {
+//     e.preventDefault();
+//     setError(null);
+
+//     const normalized = normalizeRoomCode(code);
+//     if (!isValidRoomCode(normalized)) {
+//       setError("Enter the 6-character room code exactly as shared.");
+//       return;
+//     }
+
+//     setJoining(true);
+//     try {
+//       const res = await fetch(`/api/rooms?roomId=${encodeURIComponent(normalized)}`);
+//       if (!res.ok) {
+//         const data = await res.json().catch(() => ({}));
+//         throw new Error(data.error ?? "No room found with that code.");
+//       }
+//       router.push(`/room/${normalized}`);
+//     } catch (err) {
+//       setError(err instanceof Error ? err.message : "Something went wrong");
+//       setJoining(false);
+//     }
+//   }
+
+//   return (
+//     <div className="mb-6 rounded-card border border-white/10 bg-white/[0.02] p-6 sm:p-8">
+//       <h2 className="font-display text-xl text-cream">Have a room code?</h2>
+//       <p className="mt-1 text-sm text-cream/60">Enter the 6-character code the host shared with you.</p>
+
+//       <form onSubmit={handleJoin} className="mt-4 flex gap-2">
+//         <input
+//           value={code}
+//           onChange={(e) => setCode(e.target.value)}
+//           placeholder="e.g. K7XQ2M"
+//           maxLength={8}
+//           autoCapitalize="characters"
+//           className="flex-1 rounded-lg border border-white/10 bg-base px-3 py-2 text-center font-mono text-lg uppercase tracking-[0.2em] text-cream placeholder:tracking-normal placeholder:text-cream/30"
+//         />
+//         <button
+//           type="submit"
+//           disabled={joining || !userId}
+//           className="shrink-0 rounded-full bg-gold px-5 py-2 text-sm font-semibold text-base hover:bg-gold-highlight disabled:opacity-60"
+//         >
+//           {joining ? "Joining…" : "Join"}
+//         </button>
+//       </form>
+//       {error && <p className="mt-2 text-sm text-danger">{error}</p>}
+//       {!userId && <p className="mt-2 text-xs text-cream/40">Sign in above first.</p>}
+//     </div>
+//   );
+// }
+
 // export default function LobbyPage() {
 //   const router = useRouter();
 //   const auth = useGridAuth();
@@ -248,13 +299,14 @@
 //     <main className="min-h-screen bg-base px-4 py-8 sm:px-6 sm:py-10">
 //       <div className="mx-auto flex max-w-xl items-center justify-between">
 //         <Link href="/" className="font-display text-lg text-cream">
-//           GRIDPOLY
+//           GRIDE
 //         </Link>
 //         <HowToPlayButton />
 //       </div>
 
 //       <div className="mx-auto mt-8 max-w-xl sm:mt-10">
 //         <AccountPanel auth={auth} />
+//         <JoinRoomPanel userId={userId} />
 
 //         <div className="rounded-card border border-white/10 bg-white/[0.02] p-6 sm:p-8">
 //           <h1 className="font-display text-2xl text-cream">Create a room</h1>
@@ -358,20 +410,15 @@
 
 
 
-
-
-
-
-
 "use client";
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import HowToPlayButton from "@/components/HowToPlayButton";
+import { useGridAuth } from "@/lib/auth";
 import { isValidRoomCode, normalizeRoomCode } from "@/lib/roomCode";
 import type { RoomSettings, WinCondition } from "@/lib/game/types";
-import { useGridAuth } from "@/lib/auth";
 
 const CAPITAL_PRESETS = [
   { label: "Casual — $1,500", value: 1500 },
@@ -618,6 +665,7 @@ export default function LobbyPage() {
   const { userId } = auth;
   const [startingCapital, setStartingCapital] = useState(3000);
   const [winCondition, setWinCondition] = useState<WinCondition>("timed");
+  const [winTarget, setWinTarget] = useState(10000);
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [turnTimerSeconds, setTurnTimerSeconds] = useState(45);
   const [maxPlayers, setMaxPlayers] = useState(6);
@@ -634,6 +682,7 @@ export default function LobbyPage() {
     const settings: Partial<RoomSettings> = {
       startingCapital,
       winCondition,
+      winTarget: winCondition === "net_worth_target" ? winTarget : undefined,
       durationMinutes: winCondition === "timed" ? durationMinutes : undefined,
       turnTimerSeconds,
       maxPlayers,
@@ -702,6 +751,21 @@ export default function LobbyPage() {
                 <option value="timed">Timed — highest net worth wins</option>
               </select>
             </div>
+
+            {winCondition === "net_worth_target" && (
+              <div>
+                <label className="block text-xs uppercase tracking-wide text-cream/50">Net worth target ($)</label>
+                <input
+                  type="number"
+                  value={winTarget}
+                  onChange={(e) => setWinTarget(Math.max(1, Number(e.target.value)))}
+                  min={1}
+                  step={500}
+                  className="mt-2 w-full rounded-lg border border-white/10 bg-base px-3 py-2 text-sm text-cream"
+                />
+                <p className="mt-1 text-xs text-cream/40">First player to reach this net worth wins immediately.</p>
+              </div>
+            )}
 
             <div className="grid grid-cols-2 gap-4">
               <div>
