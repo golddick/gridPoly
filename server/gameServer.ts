@@ -28,6 +28,7 @@ import {
   respondTrade,
   whoMustAct,
   stepBot,
+  currentPlayerId,
   endByHost,
   refreshWinCondition,
   type GameState,
@@ -62,6 +63,7 @@ interface WaitingPlayer {
   pieceId: string;
   isBot?: boolean; // in-memory bot — no Supabase user, no RoomPlayer/DB row
   botDifficulty?: BotDifficulty;
+  isSpectator?: boolean; // human who watches instead of playing (e.g. a host running an all-bot table)
 }
 
 interface RoomRuntime {
@@ -78,7 +80,11 @@ interface RoomRuntime {
 const rooms = new Map<string, RoomRuntime>();
 const PIECE_IDS = ["cone-gold", "cone-emerald", "cone-purple", "cone-red", "cone-teal", "cone-pink", "cone-blue", "cone-orange"];
 const MAX_BOTS = 4; // per room, set by the host before the game starts
-const BOT_THINK_MS = 900; // pause before a bot acts, so a human at the table can follow what's happening
+// A bot's turn opens with a long, spectator-friendly beat (so a watcher can see
+// "now it's this bot's turn"), then every follow-on step within that same turn is
+// quick so a single turn doesn't drag out.
+const BOT_STEP_MS = 1000; // between a bot's own steps inside its turn
+const BOT_TURN_START_MS = 3_000; // opening beat of a fresh bot turn — long enough to register whose turn it is, short enough to watch
 
 async function loadRoomSettings(roomId: string): Promise<{ hostUserId: string; settings: RoomSettings } | null> {
   const room = await prisma.room.findUnique({ where: { id: roomId } });
@@ -203,12 +209,26 @@ export function attachGameServer(io: SocketIOServer) {
       return;
     }
 
-    // A bot acts on its own after a short think delay. Because this runs on every
-    // broadcast, and each bot step broadcasts again, it's also the engine that
-    // drives an all-bot table forward — one step at a time until the game ends.
+    // A bot acts on its own after a delay. Because this runs on every broadcast,
+    // and each bot step broadcasts again, it's also the engine that drives an
+    // all-bot table forward — one step at a time until the game ends.
     if (runtime.state!.players[actorId]?.isBot) {
       runtime.actionDeadline = null; // no human countdown for a bot seat
-      runtime.actionTimer = setTimeout(() => runBotTurn(roomId, actorId), BOT_THINK_MS);
+      const state = runtime.state!;
+      const player = state.players[actorId];
+      // The first step of a bot's turn — it's the current player, hasn't rolled,
+      // nothing pending — gets a long, spectator-friendly beat so a watcher can
+      // register whose turn it is. Every follow-on step within the same turn
+      // (the post-roll decision, a doubles re-roll, an auction bid) is quick.
+      const isTurnStart =
+        currentPlayerId(state) === actorId &&
+        !player.hasRolledThisTurn &&
+        !state.pendingDecision &&
+        !state.auction;
+      runtime.actionTimer = setTimeout(
+        () => runBotTurn(roomId, actorId),
+        isTurnStart ? BOT_TURN_START_MS : BOT_STEP_MS,
+      );
       return;
     }
 
@@ -392,6 +412,18 @@ export function attachGameServer(io: SocketIOServer) {
       broadcastState(roomId);
     });
 
+    socket.on("room:setSpectator", ({ roomId, spectator }: { roomId: string; spectator: boolean }) => {
+      const runtime = rooms.get(roomId);
+      if (!runtime || runtime.state) return; // watch mode is chosen before the game starts
+      if (authUserId !== runtime.hostUserId) {
+        socket.emit("room:error", { message: "Only the host can change watch mode." });
+        return;
+      }
+      const host = runtime.waitingPlayers.find((p) => p.userId === authUserId);
+      if (host) host.isSpectator = !!spectator;
+      broadcastState(roomId);
+    });
+
     socket.on("room:start", async ({ roomId }: { roomId: string }) => {
       const runtime = rooms.get(roomId);
       if (!runtime || runtime.state) return;
@@ -399,9 +431,17 @@ export function attachGameServer(io: SocketIOServer) {
         socket.emit("room:error", { message: "Only the host can start the game." });
         return;
       }
-      if (runtime.waitingPlayers.length < 1) return;
+      // Spectators (e.g. a host running an all-bot table) don't get a seat — only
+      // real participants are seated and enter the turn order.
+      const participants = runtime.waitingPlayers.filter((p) => !p.isSpectator);
+      if (participants.length < 1) return;
+      const hostSpectating = runtime.waitingPlayers.some((p) => p.userId === runtime.hostUserId && p.isSpectator);
+      if (hostSpectating && participants.length < 2) {
+        socket.emit("room:error", { message: "Add at least 2 bots before starting a watch-only table." });
+        return;
+      }
 
-      runtime.state = createInitialGameState(roomId, runtime.settings, runtime.waitingPlayers);
+      runtime.state = createInitialGameState(roomId, runtime.settings, participants);
 
       try {
         await prisma.room.update({ where: { id: roomId }, data: { status: "in_progress", startedAt: new Date() } });

@@ -97,6 +97,7 @@ export function createInitialGameState(
       getOutOfJailFreeCards: 0,
       hasRolledThisTurn: false,
       doublesStreak: 0,
+      goPasses: 0,
       isBot: p.isBot ?? false,
       botDifficulty: p.isBot ? p.botDifficulty ?? "medium" : undefined,
     };
@@ -220,6 +221,21 @@ function refreshNetWorth(state: GameState, playerId: string) {
   state.players[playerId].netWorth = computeNetWorth(state, playerId);
 }
 
+/**
+ * Records a player crossing GO. House rule: a player's *first* lap earns nothing —
+ * the GO salary only starts paying from the second pass onward. Everyone begins on
+ * GO, so the first pass completes their opening lap; salary kicks in every lap after.
+ */
+function passGo(state: GameState, player: PlayerState) {
+  player.goPasses += 1;
+  if (player.goPasses >= 2) {
+    player.inGameBalance += GO_SALARY;
+    log(state, player.id, "pass_go", `${player.username} passed GO and collected $${GO_SALARY}.`);
+  } else {
+    log(state, player.id, "pass_go", `${player.username} passed GO for the first time — no salary on the opening lap.`);
+  }
+}
+
 /** Moves a player forward by `steps` tiles, paying GO salary on wraparound, then resolves landing. */
 function moveBySteps(state: GameState, player: PlayerState, steps: number) {
   const idx = tiles(state);
@@ -227,10 +243,7 @@ function moveBySteps(state: GameState, player: PlayerState, steps: number) {
   const nextPosition = (((prevPosition + steps) % idx.total) + idx.total) % idx.total;
   const passedGo = steps > 0 && prevPosition + steps >= idx.total;
 
-  if (passedGo) {
-    player.inGameBalance += GO_SALARY;
-    log(state, player.id, "pass_go", `${player.username} passed GO and collected $${GO_SALARY}.`);
-  }
+  if (passedGo) passGo(state, player);
 
   player.position = nextPosition;
   resolveLanding(state, player, idx.byPosition[nextPosition]);
@@ -242,10 +255,7 @@ function moveToPosition(state: GameState, player: PlayerState, position: number,
   const target = ((position % idx.total) + idx.total) % idx.total;
   const passed = collectGoIfPassed && target < player.position;
   player.position = target;
-  if (passed) {
-    player.inGameBalance += GO_SALARY;
-    log(state, player.id, "pass_go", `${player.username} passed GO and collected $${GO_SALARY}.`);
-  }
+  if (passed) passGo(state, player);
   resolveLanding(state, player, idx.byPosition[target]);
 }
 

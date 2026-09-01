@@ -107,6 +107,7 @@ export interface PlayerState {
   getOutOfJailFreeCards: number;
   hasRolledThisTurn: boolean;
   doublesStreak: number;
+  goPasses: number; // times this player has crossed GO; the first lap pays no salary (house rule)
   isBot?: boolean; // synthetic, in-memory player driven by the bot policy — never has a DB row
   botDifficulty?: BotDifficulty; // present iff isBot; selects the heuristic tier in bot.ts
 }

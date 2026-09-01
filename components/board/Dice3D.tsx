@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
@@ -54,7 +54,7 @@ function eulerForValue(value: number): [number, number, number] {
   return def.axis;
 }
 
-function Pips({ value }: { value: number }) {
+function Pips() {
   const size = 0.62;
   return (
     <group>
@@ -80,39 +80,54 @@ function Pips({ value }: { value: number }) {
   );
 }
 
-function Die({ targetValue, rolling, delay, color }: { targetValue: number; rolling: boolean; delay: number; color: string }) {
+function Die({ rollId, targetValue, delay, color }: { rollId: string; targetValue: number; delay: number; color: string }) {
   const ref = useRef<THREE.Group>(null);
-  const spin = useRef(new THREE.Vector3(7 + Math.random() * 3, 9 + Math.random() * 3, 5 + Math.random() * 3));
-  const startedAt = useRef<number | null>(null);
-  const settled = useRef(false);
+  const angVel = useRef(new THREE.Vector3());
+  const startAt = useRef<number | null>(null);
+  const settleFrom = useRef<THREE.Quaternion | null>(null);
+  const settleTo = useRef(new THREE.Quaternion());
+  const done = useRef(false);
 
+  const SPIN_MS = 750; // free tumble
+  const SETTLE_MS = 600; // eased deceleration onto the final face
+
+  // A fresh rollId (or a changed target) restarts the throw: pick a new random
+  // tumble velocity and precompute the orientation that lands `targetValue` on top.
   useEffect(() => {
-    if (rolling) {
-      startedAt.current = performance.now() + delay * 1000;
-      settled.current = false;
-      spin.current.set(7 + Math.random() * 3, 9 + Math.random() * 3, 5 + Math.random() * 3);
-    }
-  }, [rolling, delay, targetValue]);
+    startAt.current = performance.now() + delay * 1000;
+    settleFrom.current = null;
+    done.current = false;
+    const rand = () => (6 + Math.random() * 6) * (Math.random() < 0.5 ? -1 : 1);
+    angVel.current.set(rand(), rand(), rand());
+    const [tx, ty, tz] = eulerForValue(targetValue);
+    settleTo.current.setFromEuler(new THREE.Euler(tx, ty, tz));
+  }, [rollId, targetValue, delay]);
 
-  useFrame(() => {
+  useFrame((_, delta) => {
     const g = ref.current;
-    if (!g) return;
-    if (!rolling || settled.current) return;
+    if (!g || startAt.current === null || done.current) return;
 
     const now = performance.now();
-    if (startedAt.current === null || now < startedAt.current) return;
+    if (now < startAt.current) return; // still in the per-die stagger delay
+    const elapsed = now - startAt.current;
 
-    const elapsed = (now - startedAt.current) / 1000;
-    const duration = 0.9;
+    if (elapsed < SPIN_MS) {
+      // Free tumble — multiplied by delta so the spin speed is frame-rate independent.
+      g.rotation.x += angVel.current.x * delta;
+      g.rotation.y += angVel.current.y * delta;
+      g.rotation.z += angVel.current.z * delta;
+      return;
+    }
 
-    if (elapsed < duration) {
-      g.rotation.x += spin.current.x * 0.02;
-      g.rotation.y += spin.current.y * 0.02;
-      g.rotation.z += spin.current.z * 0.02;
-    } else {
-      const [tx, ty, tz] = eulerForValue(targetValue);
-      g.rotation.set(tx, ty, tz);
-      settled.current = true;
+    // Decelerate onto the exact target face with an ease-out cubic slerp, so the
+    // die glides to a stop instead of snapping. Capture where the tumble left off.
+    if (!settleFrom.current) settleFrom.current = g.quaternion.clone();
+    const t = Math.min(1, (elapsed - SPIN_MS) / SETTLE_MS);
+    const eased = 1 - Math.pow(1 - t, 3);
+    g.quaternion.slerpQuaternions(settleFrom.current, settleTo.current, eased);
+    if (t >= 1) {
+      g.quaternion.copy(settleTo.current); // pin exactly on the face, then rest
+      done.current = true;
     }
   });
 
@@ -122,15 +137,15 @@ function Die({ targetValue, rolling, delay, color }: { targetValue: number; roll
         <boxGeometry args={[0.62, 0.62, 0.62]} />
         <meshStandardMaterial color={color} roughness={0.35} metalness={0.05} />
       </mesh>
-      <Pips value={targetValue} />
+      <Pips />
     </group>
   );
 }
 
 /**
  * Two animated dice rendered inside the R3F canvas. `rollId` changes every
- * time the server records a new roll — that change triggers the spin, which
- * settles on the authoritative d1/d2 values.
+ * time the server records a new roll — that change restarts each die's tumble,
+ * which decelerates smoothly onto the authoritative d1/d2 value (face-up).
  */
 export default function Dice3D({
   rollId,
@@ -143,27 +158,15 @@ export default function Dice3D({
   d2: number;
   position?: [number, number, number];
 }) {
-  const [rolling, setRolling] = useState(false);
-  const lastId = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (rollId && rollId !== lastId.current) {
-      lastId.current = rollId;
-      setRolling(true);
-      const t = setTimeout(() => setRolling(false), 1300);
-      return () => clearTimeout(t);
-    }
-  }, [rollId]);
-
   if (!rollId) return null;
 
   return (
     <group position={position}>
       <group position={[-0.5, 0, 0]}>
-        <Die targetValue={d1} rolling={rolling} delay={0} color="#F2EFE9" />
+        <Die rollId={rollId} targetValue={d1} delay={0} color="#F2EFE9" />
       </group>
       <group position={[0.5, 0, 0]}>
-        <Die targetValue={d2} rolling={rolling} delay={0.1} color="#F2EFE9" />
+        <Die rollId={rollId} targetValue={d2} delay={0.08} color="#F2EFE9" />
       </group>
     </group>
   );

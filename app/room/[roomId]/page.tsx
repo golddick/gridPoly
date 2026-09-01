@@ -8,7 +8,7 @@ import Modal from "@/components/ui/Modal";
 import TileInfoPanel from "@/components/TileInfoPanel";
 import Chat from "@/components/Chat";
 import TradePanel from "@/components/TradePanel";
-import PieceSelector from "@/components/PieceSelector";
+import PieceSelector, { pieceColor } from "@/components/PieceSelector";
 import TurnTimer from "@/components/TurnTimer";
 import { useGameStore } from "@/lib/store";
 import { useGridAuth } from "@/lib/auth";
@@ -39,6 +39,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
     choosePiece,
     addBot,
     removeBot,
+    setSpectator,
     start,
     endGame,
     roll,
@@ -85,6 +86,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
   const [dismissedChatNoticeId, setDismissedChatNoticeId] = useState<string | null>(null);
   const [endGameConfirmOpen, setEndGameConfirmOpen] = useState(false);
   const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>("medium");
+  const [inspectPlayerId, setInspectPlayerId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!userId) return;
@@ -98,6 +100,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
   const isMyTurn = game && myPlayerId && game.playerOrder[game.currentPlayerIndex] === myPlayerId;
   const me = game && myPlayerId ? game.players[myPlayerId] : null;
   const myAssets = useMemo(() => (game && myPlayerId ? getPlayerAssets(game, myPlayerId) : []), [game, myPlayerId]);
+  const spectating = Boolean(game) && !myPlayerId; // in-game with no seat = watching an all-bot table
 
   const latestEvent = game?.marketEvents[game.marketEvents.length - 1] ?? null;
   const showEventModal = Boolean(latestEvent && latestEvent.id !== dismissedEventId);
@@ -137,6 +140,12 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
     const botCount = (snapshot?.waitingPlayers ?? []).filter((p) => p.isBot).length;
     const roomFull = (snapshot?.waitingPlayers.length ?? 0) >= (snapshot?.settings.maxPlayers ?? 0);
     const canAddBot = botCount < 4 && !roomFull;
+    const iAmSpectator = myWaiting?.isSpectator ?? false;
+    // Spectators (a host watching an all-bot table) don't take a seat, so only
+    // non-spectators count toward "can we start". A watching host needs ≥2 bots.
+    const participantCount = (snapshot?.waitingPlayers ?? []).filter((p) => !p.isSpectator).length;
+    const hostSpectating = (snapshot?.waitingPlayers ?? []).find((p) => p.userId === snapshot?.hostUserId)?.isSpectator ?? false;
+    const canStart = participantCount >= 1 && !(hostSpectating && participantCount < 2);
 
     return (
       <main className="min-h-screen bg-base px-4 py-8 sm:px-6 sm:py-10">
@@ -223,6 +232,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
                 </span>
                 <span className="flex items-center gap-3">
                   {p.userId === snapshot?.hostUserId && <span className="text-xs uppercase tracking-wide text-gold-highlight">Host</span>}
+                  {p.isSpectator && <span className="text-xs uppercase tracking-wide text-primary-accent">Watching</span>}
                   {p.isBot && isHost && (
                     <button
                       type="button"
@@ -239,16 +249,18 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
             {(!snapshot || snapshot.waitingPlayers.length === 0) && <li className="text-sm text-cream/40">Connecting…</li>}
           </ul>
 
-          <div className="mt-6">
-            <PieceSelector
-              selectedPieceId={selectedPieceId ?? myWaiting?.pieceId ?? null}
-              takenPieceIds={takenPieces}
-              onSelect={(pieceId) => {
-                setSelectedPieceId(pieceId);
-                choosePiece(pieceId);
-              }}
-            />
-          </div>
+          {!iAmSpectator && (
+            <div className="mt-6">
+              <PieceSelector
+                selectedPieceId={selectedPieceId ?? myWaiting?.pieceId ?? null}
+                takenPieceIds={takenPieces}
+                onSelect={(pieceId) => {
+                  setSelectedPieceId(pieceId);
+                  choosePiece(pieceId);
+                }}
+              />
+            </div>
+          )}
 
           {isHost && (
             <div className="mt-6 rounded-lg border border-white/10 bg-base/40 p-4">
@@ -291,13 +303,41 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
           )}
 
           {isHost && (
-            <button
-              onClick={start}
-              disabled={(snapshot?.waitingPlayers.length ?? 0) < 1}
-              className="mt-8 w-full rounded-full bg-gold py-3 text-sm font-semibold text-base transition hover:bg-gold-highlight disabled:opacity-50"
-            >
-              Start game
-            </button>
+            <div className="mt-4 flex items-center justify-between rounded-lg border border-white/10 bg-base/40 p-4">
+              <div className="pr-3">
+                <p className="text-sm text-cream">Watch only</p>
+                <p className="mt-0.5 text-xs text-cream/40">Sit out and spectate an all-bot table. Needs at least 2 bots.</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={iAmSpectator}
+                aria-label="Watch only"
+                onClick={() => setSpectator(!iAmSpectator)}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition ${iAmSpectator ? "bg-gold" : "bg-white/15"}`}
+              >
+                <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-cream transition-all ${iAmSpectator ? "left-[22px]" : "left-0.5"}`} />
+              </button>
+            </div>
+          )}
+
+          {isHost && (
+            <>
+              <button
+                onClick={start}
+                disabled={!canStart}
+                className="mt-6 w-full rounded-full bg-gold py-3 text-sm font-semibold text-base transition hover:bg-gold-highlight disabled:opacity-50"
+              >
+                {iAmSpectator ? "Start & watch" : "Start game"}
+              </button>
+              {!canStart && (
+                <p className="mt-2 text-center text-xs text-cream/40">
+                  {hostSpectating
+                    ? `Add ${Math.max(0, 2 - participantCount)} more bot${Math.max(0, 2 - participantCount) === 1 ? "" : "s"} to start a watch-only table.`
+                    : "Add a bot or wait for another player to join."}
+                </p>
+              )}
+            </>
           )}
           {!isHost && <p className="mt-8 text-center text-sm text-cream/40">Waiting for the host to start…</p>}
         </div>
@@ -397,6 +437,44 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
         </section>
 
         <aside className="space-y-5 border-t border-white/10 bg-white/[0.02] p-4 sm:p-5 lg:border-l lg:border-t-0">
+          {spectating && (
+            <div className="rounded-lg border border-primary-accent/30 bg-primary-accent/5 p-3 text-sm text-primary-accent">
+              👁 Watching — you’re spectating this table.
+            </div>
+          )}
+
+          <div>
+            <h3 className="text-xs uppercase tracking-wide text-cream/50">Players</h3>
+            <ul className="mt-2 space-y-1.5 text-sm">
+              {game.playerOrder.map((pid) => {
+                const p = game.players[pid];
+                const isCurrent = game.playerOrder[game.currentPlayerIndex] === pid;
+                return (
+                  <li key={pid}>
+                    <button
+                      type="button"
+                      onClick={() => setInspectPlayerId(pid)}
+                      className="flex w-full items-center justify-between rounded-lg border border-white/10 px-3 py-2 text-left transition hover:border-white/25"
+                      title="View properties & net worth"
+                    >
+                      <span className="flex min-w-0 items-center gap-2 text-cream/80">
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: pieceColor(p.pieceId) }} />
+                        <span className="truncate">{p.username}</span>
+                        {p.isBot && <span aria-hidden>🤖</span>}
+                        {pid === myPlayerId && <span className="text-[10px] uppercase tracking-wide text-cream/40">You</span>}
+                        {isCurrent && <span className="text-[10px] uppercase tracking-wide text-gold-highlight">Turn</span>}
+                        {p.status === "bankrupt" && <span className="text-[10px] uppercase tracking-wide text-danger">Out</span>}
+                      </span>
+                      <span className="shrink-0 text-primary-accent">${p.netWorth.toLocaleString()}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+
+          {!spectating && (
+          <>
           <div>
             <h2 className="font-display text-lg text-cream">Your position</h2>
             <div className="mt-3 space-y-2 text-sm">
@@ -536,6 +614,8 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
               </div>
             )}
           </div>
+          </>
+          )}
 
           <div>
             <h3 className="text-xs uppercase tracking-wide text-cream/50">Activity</h3>
@@ -550,14 +630,17 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 
       <footer className="flex items-center justify-between border-t border-white/10 px-4 py-3 sm:px-6 sm:py-4">
         <span className="text-xs text-cream/40">
-          {me?.status === "bankrupt"
-            ? "You're out — spectating"
-            : me?.inJail
-              ? `In Jail — attempt ${me.jailTurns}/3`
-              : me?.doublesStreak
-                ? "Doubles! Roll again."
-                : ""}
+          {spectating
+            ? "Spectating — bots are playing"
+            : me?.status === "bankrupt"
+              ? "You're out — spectating"
+              : me?.inJail
+                ? `In Jail — attempt ${me.jailTurns}/3`
+                : me?.doublesStreak
+                  ? "Doubles! Roll again."
+                  : ""}
         </span>
+        {!spectating && (
         <div className="flex gap-2">
           {isMyTurn && me?.inJail ? (
             <>
@@ -587,6 +670,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
             </>
           )}
         </div>
+        )}
       </footer>
 
       <Modal open={Boolean(pendingIsMine && pending?.kind === "buy_or_skip")} onClose={() => buyDecision(false)} title={pendingTile ? `Buy ${pendingTile.name}?` : "Buy?"}>
@@ -740,6 +824,53 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
           onRespond={respondTrade}
         />
       )}
+
+      {/* Inspect any player's holdings & net worth — opened from the Players roster */}
+      <Modal
+        open={Boolean(inspectPlayerId && game.players[inspectPlayerId])}
+        onClose={() => setInspectPlayerId(null)}
+        title={(inspectPlayerId && game.players[inspectPlayerId]?.username) || "Player"}
+      >
+        {inspectPlayerId && game.players[inspectPlayerId] && (() => {
+          const p = game.players[inspectPlayerId];
+          const assets = getPlayerAssets(game, inspectPlayerId);
+          return (
+            <div>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <div className="rounded-lg border border-white/10 p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-cream/40">Cash</p>
+                  <p className="mt-0.5 text-gold-highlight">${p.inGameBalance.toLocaleString()}</p>
+                </div>
+                <div className="rounded-lg border border-white/10 p-3">
+                  <p className="text-[11px] uppercase tracking-wide text-cream/40">Net worth</p>
+                  <p className="mt-0.5 text-primary-accent">${p.netWorth.toLocaleString()}</p>
+                </div>
+              </div>
+              <h4 className="mt-4 text-xs uppercase tracking-wide text-cream/50">Holdings ({assets.length})</h4>
+              <ul className="mt-2 max-h-72 space-y-1.5 overflow-y-auto text-sm">
+                {assets.length ? (
+                  assets.map((a) => (
+                    <li key={a.tileId} className="flex items-center justify-between gap-2 rounded-lg border border-white/10 p-2">
+                      <span className="flex min-w-0 items-center gap-2 text-cream/80">
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${ASSET_DOT[a.type]}`} />
+                        <span className="truncate">{a.name}</span>
+                        {a.buildLevel ? (
+                          <span className="shrink-0 text-[10px] text-cream/50">{a.buildLevel >= 5 ? "🏨 Hotel" : `🏠×${a.buildLevel}`}</span>
+                        ) : null}
+                        {!a.isSingleOwner && <span className="shrink-0 text-cream/40">({Math.round(a.ownershipPercent)}%)</span>}
+                        {a.mortgaged && <span className="shrink-0 text-[10px] uppercase text-danger">Mortgaged</span>}
+                      </span>
+                      <span className="shrink-0 text-cream/70">${a.currentShareValue.toLocaleString()}</span>
+                    </li>
+                  ))
+                ) : (
+                  <li className="text-cream/40">No holdings yet</li>
+                )}
+              </ul>
+            </div>
+          );
+        })()}
+      </Modal>
 
       {/* Host: confirm before ending the game early */}
       <Modal open={endGameConfirmOpen} onClose={() => setEndGameConfirmOpen(false)} title="End the game?">

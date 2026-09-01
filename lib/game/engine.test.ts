@@ -177,14 +177,27 @@ describe("applyRoll — movement, GO salary, doubles", () => {
     expect(state.lastRoll).toMatchObject({ playerId: pid, d1: 3, d2: 4, isDoubles: false });
   });
 
-  it("pays GO salary when a player wraps past position 0", () => {
+  it("pays no GO salary on a player's first lap (house rule)", () => {
     let state = freshState();
     const pid = currentPlayerId(state);
     const idx = boardIndex(state.boardSize);
     state.players[pid].position = idx.total - 2;
     const before = state.players[pid].inGameBalance;
     state = withRandomQueue([fracFor(4), fracFor(3)], () => applyRoll(state, pid));
+    expect(state.players[pid].inGameBalance).toBe(before); // first crossing of GO earns nothing
+    expect(state.players[pid].goPasses).toBe(1);
+  });
+
+  it("pays GO salary from the second lap onward", () => {
+    let state = freshState();
+    const pid = currentPlayerId(state);
+    const idx = boardIndex(state.boardSize);
+    state.players[pid].position = idx.total - 2;
+    state.players[pid].goPasses = 1; // already completed the opening lap
+    const before = state.players[pid].inGameBalance;
+    state = withRandomQueue([fracFor(4), fracFor(3)], () => applyRoll(state, pid));
     expect(state.players[pid].inGameBalance).toBe(before + 200);
+    expect(state.players[pid].goPasses).toBe(2);
   });
 
   it("ignores a roll from a player who isn't the current turn", () => {

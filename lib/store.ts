@@ -11,6 +11,7 @@ export interface WaitingPlayer {
   pieceId: string;
   isBot?: boolean;
   botDifficulty?: BotDifficulty;
+  isSpectator?: boolean; // host watching an all-bot table — no seat in the running game
 }
 
 export interface RoomSnapshot {
@@ -36,6 +37,7 @@ interface GameStore {
   choosePiece: (pieceId: string) => void;
   addBot: (difficulty?: BotDifficulty) => void;
   removeBot: (botId: string) => void;
+  setSpectator: (spectator: boolean) => void;
   start: () => void;
   endGame: () => void;
   roll: () => void;
@@ -114,10 +116,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
 
     socket.on("game:state", (snapshot: RoomSnapshot) => {
-      const me =
-        snapshot.waitingPlayers.find((p) => p.userId === userId)?.id ??
-        (snapshot.game ? Object.values(snapshot.game.players).find((p) => p.userId === userId)?.id : null) ??
-        null;
+      const gameMe = snapshot.game ? Object.values(snapshot.game.players).find((p) => p.userId === userId) : null;
+      const waitingMe = snapshot.waitingPlayers.find((p) => p.userId === userId);
+      // A spectator has a waiting entry but no seat in the running game, so they
+      // never get a player id — the room UI treats a null id as "watching".
+      const me = gameMe?.id ?? (waitingMe && !waitingMe.isSpectator ? waitingMe.id : null) ?? null;
       set({ snapshot, myPlayerId: me });
     });
 
@@ -152,6 +155,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { roomId } = get();
     if (!roomId) return;
     getSocket().emit("room:removeBot", { roomId, botId });
+  },
+
+  setSpectator: (spectator) => {
+    const { roomId } = get();
+    if (!roomId) return;
+    getSocket().emit("room:setSpectator", { roomId, spectator });
   },
 
   start: () => {

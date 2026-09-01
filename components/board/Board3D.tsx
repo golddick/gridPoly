@@ -833,12 +833,13 @@ export interface TileVisualState {
 }
 
 // ---------- shared geometries (created once, reused across every tile) ----------
-const HOUSE_BODY = new THREE.BoxGeometry(0.1, 0.09, 0.1);
-const HOUSE_ROOF = new THREE.ConeGeometry(0.08, 0.07, 4);
-const HOTEL_BODY = new THREE.BoxGeometry(0.22, 0.32, 0.22);
-const HOTEL_CAP = new THREE.ConeGeometry(0.17, 0.14, 4);
-const FLAG_POLE = new THREE.CylinderGeometry(0.008, 0.008, 0.18, 6);
-const FLAG = new THREE.PlaneGeometry(0.08, 0.05);
+// Buildings are a core gameplay signal, so they're deliberately chunky and follow
+// the classic board-game convention: several small houses, or one big red hotel.
+const HOUSE_BODY = new THREE.BoxGeometry(0.15, 0.13, 0.15);
+const HOUSE_ROOF = new THREE.ConeGeometry(0.13, 0.1, 4);
+const HOTEL_BODY = new THREE.BoxGeometry(0.44, 0.22, 0.24);
+const HOTEL_ROOF = new THREE.BoxGeometry(0.48, 0.05, 0.28);
+const HOTEL_SIGN = new THREE.BoxGeometry(0.13, 0.08, 0.02);
 
 function labelForTile(tile: { type: TileType; name: string; basePrice: number; groupColor?: string }, value: number) {
   const isCorner = tile.type === "go" || tile.type === "jail" || tile.type === "exchange_floor" || tile.type === "go_to_jail";
@@ -849,45 +850,37 @@ function labelForTile(tile: { type: TileType; name: string; basePrice: number; g
 }
 
 function PropertyStructure({ buildLevel = 0, gold = false }: { buildLevel?: number; gold?: boolean }) {
-  if (buildLevel === 0) {
-    return (
-      <group position={[0, 0.09, 0]}>
-        <mesh geometry={FLAG_POLE} position={[0, 0, 0]}>
-          <meshStandardMaterial color="#B0A78C" roughness={0.5} metalness={0.2} />
-        </mesh>
-        <mesh geometry={FLAG} position={[0.04, 0.06, 0]}>
-          <meshStandardMaterial color={gold ? "#D4AF37" : "#3C8F6D"} side={THREE.DoubleSide} roughness={0.6} />
-        </mesh>
-      </group>
-    );
-  }
+  // Hotel (level 5): one large, unmistakable RED building. Red is the universal
+  // "hotel" signal, so it never reads as just another stack of houses.
   if (buildLevel >= 5) {
     return (
-      <group position={[0, 0.16, 0]}>
-        <mesh geometry={HOTEL_BODY} position={[0, 0.16, 0]} castShadow receiveShadow>
-          <meshStandardMaterial color={gold ? "#F0D68A" : "#FBF6E9"} roughness={0.55} />
+      <group position={[0, 0.04, 0.06]}>
+        <mesh geometry={HOTEL_BODY} position={[0, 0.11, 0]} castShadow receiveShadow>
+          <meshStandardMaterial color="#C0392B" roughness={0.5} />
         </mesh>
-        <mesh geometry={HOTEL_CAP} position={[0, 0.39, 0]} rotation={[0, Math.PI / 4, 0]} castShadow>
-          <meshStandardMaterial color="#D4AF37" roughness={0.3} metalness={0.4} />
+        <mesh geometry={HOTEL_ROOF} position={[0, 0.245, 0]} castShadow>
+          <meshStandardMaterial color="#7E241A" roughness={0.5} />
+        </mesh>
+        <mesh geometry={HOTEL_SIGN} position={[0, 0.33, 0.13]}>
+          <meshStandardMaterial color="#F4D77A" emissive="#E0A72E" emissiveIntensity={0.45} roughness={0.4} />
         </mesh>
       </group>
     );
   }
-  const positions: [number, number][] = [
-    [-0.06, -0.06],
-    [0.06, -0.06],
-    [-0.06, 0.06],
-    [0.06, 0.06],
-  ];
+  // Houses (levels 1–4): a row of chunky buildings. Green for properties, gold for
+  // estates — matching the tile's group accent so you can read the street at a glance.
+  const bodyColor = gold ? "#E7C24B" : "#3FA76A";
+  const roofColor = gold ? "#A9842A" : "#256B47";
+  const xs = [-0.21, -0.07, 0.07, 0.21].slice(0, Math.min(4, Math.max(1, buildLevel)));
   return (
-    <group position={[0, 0.08, 0]}>
-      {positions.slice(0, buildLevel).map(([x, z], i) => (
-        <group key={i} position={[x, 0, z]}>
-          <mesh geometry={HOUSE_BODY} position={[0, 0.045, 0]} castShadow receiveShadow>
-            <meshStandardMaterial color="#FBF6E9" roughness={0.6} />
+    <group position={[0, 0.04, 0.14]}>
+      {xs.map((x, i) => (
+        <group key={i} position={[x, 0, 0]}>
+          <mesh geometry={HOUSE_BODY} position={[0, 0.065, 0]} castShadow receiveShadow>
+            <meshStandardMaterial color={bodyColor} roughness={0.55} />
           </mesh>
-          <mesh geometry={HOUSE_ROOF} position={[0, 0.125, 0]} rotation={[0, Math.PI / 4, 0]} castShadow>
-            <meshStandardMaterial color={gold ? "#D4AF37" : "#3C8F6D"} roughness={0.5} />
+          <mesh geometry={HOUSE_ROOF} position={[0, 0.18, 0]} rotation={[0, Math.PI / 4, 0]} castShadow>
+            <meshStandardMaterial color={roofColor} roughness={0.5} />
           </mesh>
         </group>
       ))}
