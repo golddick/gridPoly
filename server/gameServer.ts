@@ -526,8 +526,8 @@ export function attachGameServer(io: SocketIOServer) {
     on(
       "game:betDecision",
       "bet",
-      (s, p: { roomId: string; playerId: string; choice: "bet" | "fee"; betType?: BetType; stakeAmount?: number }) =>
-        resolveBetOrFee(s, p.playerId, p.choice, p.betType, p.stakeAmount)
+      (s, p: { roomId: string; playerId: string; choice: "bet" | "fee"; betType?: BetType; selection?: string; stakeAmount?: number }) =>
+        resolveBetOrFee(s, p.playerId, p.choice, p.betType, p.selection, p.stakeAmount)
     );
     on(
       "game:proposeTrade",

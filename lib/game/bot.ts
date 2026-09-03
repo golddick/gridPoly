@@ -103,7 +103,7 @@ export type BotAction =
   | { type: "buyDecision"; accept: boolean }
   | { type: "outbidDecision"; accept: boolean }
   | { type: "investDecision"; invest: boolean }
-  | { type: "betDecision"; choice: "bet" | "fee"; betType?: "color" | "range" | "number"; stakeAmount?: number }
+  | { type: "betDecision"; choice: "bet" | "fee"; betType?: "color" | "range" | "number"; selection?: string; stakeAmount?: number }
   | { type: "renewDecision"; renew: boolean }
   | { type: "build"; tileId: string }
   | { type: "takeLoan"; principal: number }
@@ -213,7 +213,8 @@ export function decideBotAction(state: GameState, botId: string, difficulty?: Bo
         if (!cfg.willBet) return { type: "betDecision", choice: "fee" };
         const stake = Math.round(cfg.betStakeFraction * cash);
         if (stake > 0 && cash - stake >= buffer) {
-          return { type: "betDecision", choice: "bet", betType: "color", stakeAmount: stake };
+          // Gambling bots keep it simple: an even-money color bet on red.
+          return { type: "betDecision", choice: "bet", betType: "color", selection: "red", stakeAmount: stake };
         }
         return { type: "betDecision", choice: "fee" };
       }
@@ -275,7 +276,7 @@ export function applyBotAction(state: GameState, botId: string, action: BotActio
     case "investDecision":
       return resolveInvestOrFee(state, botId, action.invest);
     case "betDecision":
-      return resolveBetOrFee(state, botId, action.choice, action.betType, action.stakeAmount);
+      return resolveBetOrFee(state, botId, action.choice, action.betType, action.selection, action.stakeAmount);
     case "renewDecision":
       return resolveRenewOrRelease(state, botId, action.renew);
     case "build":

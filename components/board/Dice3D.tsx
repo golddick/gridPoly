@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
+import { FACE_DEFS, eulerForValue } from "@/lib/game/diceFaces";
 
 // Pip layout on a 3x3 grid, values are [x, y] offsets in face-local space.
 const PIP_PATTERNS: Record<number, [number, number][]> = {
@@ -39,43 +40,35 @@ const PIP_PATTERNS: Record<number, [number, number][]> = {
   ],
 };
 
-// Face normal -> [rotation to bring that face to +Y (up), pip value shown on that face]
-const FACE_DEFS: { axis: [number, number, number]; normal: THREE.Vector3; value: number }[] = [
-  { axis: [0, 0, 0], normal: new THREE.Vector3(0, 1, 0), value: 2 },
-  { axis: [Math.PI, 0, 0], normal: new THREE.Vector3(0, -1, 0), value: 5 },
-  { axis: [0, 0, Math.PI / 2], normal: new THREE.Vector3(-1, 0, 0), value: 1 },
-  { axis: [0, 0, -Math.PI / 2], normal: new THREE.Vector3(1, 0, 0), value: 6 },
-  { axis: [Math.PI / 2, 0, 0], normal: new THREE.Vector3(0, 0, -1), value: 3 },
-  { axis: [-Math.PI / 2, 0, 0], normal: new THREE.Vector3(0, 0, 1), value: 4 },
-];
-
-function eulerForValue(value: number): [number, number, number] {
-  const def = FACE_DEFS.find((f) => f.value === value) ?? FACE_DEFS[0];
-  return def.axis;
-}
+// The die's face table (which value sits on which face, and the rotation that
+// brings it face-up) lives in lib/game/diceFaces.ts so it can be unit-tested
+// without pulling in three.js / R3F. See diceFaces.test.ts for the +Y invariant.
 
 function Pips() {
   const size = 0.62;
   return (
     <group>
-      {FACE_DEFS.map((face) => (
-        <group key={face.value} position={face.normal.clone().multiplyScalar(size / 2)}>
-          {PIP_PATTERNS[face.value].map(([px, py], i) => {
-            // Orient each pip cluster to sit flush on its face.
-            const n = face.normal;
-            const up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-            const right = new THREE.Vector3().crossVectors(up, n).normalize();
-            const trueUp = new THREE.Vector3().crossVectors(n, right).normalize();
-            const pos = right.clone().multiplyScalar(px).add(trueUp.clone().multiplyScalar(py));
-            return (
-              <mesh key={i} position={[pos.x, pos.y, pos.z]}>
-                <sphereGeometry args={[0.045, 10, 10]} />
-                <meshStandardMaterial color="#1a1d21" roughness={0.4} />
-              </mesh>
-            );
-          })}
-        </group>
-      ))}
+      {FACE_DEFS.map((face) => {
+        // Rebuild the face normal as a vector for the pip-placement math.
+        const n = new THREE.Vector3(...face.normal);
+        return (
+          <group key={face.value} position={[n.x * (size / 2), n.y * (size / 2), n.z * (size / 2)]}>
+            {PIP_PATTERNS[face.value].map(([px, py], i) => {
+              // Orient each pip cluster to sit flush on its face.
+              const up = Math.abs(n.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
+              const right = new THREE.Vector3().crossVectors(up, n).normalize();
+              const trueUp = new THREE.Vector3().crossVectors(n, right).normalize();
+              const pos = right.clone().multiplyScalar(px).add(trueUp.clone().multiplyScalar(py));
+              return (
+                <mesh key={i} position={[pos.x, pos.y, pos.z]}>
+                  <sphereGeometry args={[0.045, 10, 10]} />
+                  <meshStandardMaterial color="#1a1d21" roughness={0.4} />
+                </mesh>
+              );
+            })}
+          </group>
+        );
+      })}
     </group>
   );
 }

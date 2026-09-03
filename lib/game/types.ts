@@ -39,17 +39,14 @@ export type BetType = "color" | "range" | "number";
  */
 export type BotDifficulty = "easy" | "medium" | "hard";
 
+// Total amount returned on a winning bet, per unit staked (the stake is deducted
+// up front, so a win nets (multiplier − 1) × stake profit). Mapped onto a
+// single-zero roulette wheel: color = red/black (18/37), range = a dozen (12/37),
+// number = one pocket (1/37). See lib/game/roulette.ts.
 export const BET_MULTIPLIERS: Record<BetType, number> = {
   color: 2,
   range: 3,
   number: 35,
-};
-
-// Rough odds used server-side to resolve a spin — lower odds, higher multiplier.
-export const BET_WIN_PROBABILITY: Record<BetType, number> = {
-  color: 0.46,
-  range: 0.3,
-  number: 0.025,
 };
 
 export interface RoomSettings {
@@ -210,11 +207,12 @@ export interface BetRecord {
   bettorPlayerId: string;
   ownerPlayerId: string;
   betType: BetType;
+  selection: string; // "red"/"black" (color), "low"/"mid"/"high" (range), or the pocket "0".."36" (number)
   betAmount: number;
   multiplier: number;
   result: "win" | "lose";
   payoutAmount: number;
-  rakeAmount: number;
+  resultPocket: number; // the authoritative landed pocket 0–36, so every client animates the same spin
   turnNumber: number;
 }
 

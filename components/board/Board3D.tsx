@@ -788,28 +788,16 @@ import * as THREE from "three";
 import { boardIndex, hopPath, isWalkableHop, jailPosition, tileLayoutPosition } from "@/lib/game/board";
 import { createInitialGameState, tileCurrentValue } from "@/lib/game/engine";
 import type { GameState, TileType } from "@/lib/game/types";
+import { TILE_TYPE_COLOR } from "@/lib/tileColors";
 import { pieceColor } from "@/components/PieceSelector";
 import { tileLabelTexture, cornerLabelTexture, parchmentTexture, tickerTexture } from "./tileTextures";
 import Dice3D from "./Dice3D";
 
 // Bright, saturated "printed board game" accent colors — these sit on a
-// cream card body (see tileTextures.ts), not glowing on a dark panel.
-const TILE_COLOR: Record<TileType, string> = {
-  go: "#C0392B",
-  jail: "#8A7A5E",
-  go_to_jail: "#A83232",
-  exchange_floor: "#9C9078",
-  chance: "#E0A72E",
-  community: "#2E8B57",
-  property: "#3C8F6D",
-  estate: "#D4AF37",
-  bond: "#4A9B7F",
-  contract: "#D4AF37",
-  betting: "#B23A2E",
-  tech_company: "#7A4FB5",
-  crypto: "#8A5FC7",
-  startup: "#7A4FB5",
-};
+// cream card body (see tileTextures.ts), not glowing on a dark panel. The
+// per-type palette is shared with the 2D portfolio dots via lib/tileColors.ts
+// so no two tile types can ever look alike on one surface but different on the other.
+const TILE_COLOR = TILE_TYPE_COLOR;
 
 const CORNER_NAMES: Record<string, string> = {
   go: "START",

@@ -6,10 +6,17 @@ interface ModalProps {
   open: boolean;
   onClose: () => void;
   title: string;
+  size?: "lg" | "xl" | "2xl";
   children: React.ReactNode;
 }
 
-export default function Modal({ open, onClose, title, children }: ModalProps) {
+const MAX_WIDTH: Record<NonNullable<ModalProps["size"]>, string> = {
+  lg: "max-w-lg",
+  xl: "max-w-xl",
+  "2xl": "max-w-2xl",
+};
+
+export default function Modal({ open, onClose, title, size = "lg", children }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,7 +45,7 @@ export default function Modal({ open, onClose, title, children }: ModalProps) {
         aria-labelledby="modal-title"
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="relative w-full max-w-lg rounded-card border border-white/10 bg-[#181B1F] p-6 shadow-2xl sm:p-8"
+        className={`relative w-full ${MAX_WIDTH[size]} rounded-card border border-white/10 bg-[#181B1F] p-6 shadow-2xl sm:p-8`}
       >
         <div className="mb-5 flex items-start justify-between gap-4">
           <h2

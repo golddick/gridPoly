@@ -19,7 +19,8 @@ import type {
   TileMarketState,
   TradeOffer,
 } from "./types";
-import { BET_MULTIPLIERS, BET_WIN_PROBABILITY } from "./types";
+import { BET_MULTIPLIERS } from "./types";
+import { betWins, spinPocket } from "./roulette";
 
 const LOAN_INTEREST_RATE = 0.08;
 const LOAN_INSTALLMENT_INTERVAL = 3;
@@ -27,7 +28,6 @@ const LOAN_INSTALLMENTS = 6;
 const LOAN_CAP_PCT_OF_NET_WORTH = 0.75;
 const CONTRACT_DURATION_TURNS = 15;
 const CONTRACT_RENEWAL_UPKEEP_PCT = 0.15; // % of current value, paid to renew
-const BET_RAKE_PERCENT = 0.05;
 const MIN_VALUE_MULTIPLIER = 0.15;
 const JAIL_BAIL = 50;
 const MAX_JAIL_TURNS = 3;
@@ -916,6 +916,7 @@ export function resolveBetOrFee(
   playerId: string,
   choice: "bet" | "fee",
   betType?: BetType,
+  selection?: string,
   stakeAmount?: number
 ): GameState {
   const state = clone(prevState);
@@ -927,54 +928,72 @@ export function resolveBetOrFee(
   const ownerId = decision.currentOwnerPlayerId!;
   const owner = state.players[ownerId];
 
-  if (choice === "fee") {
+  // A valid, funded bet resolves on the wheel; anything else (an explicit "fee",
+  // or a malformed/underfunded bet) falls back to the flat landing fee so the
+  // turn always resolves and the owner is never shortchanged.
+  const validBet =
+    choice === "bet" &&
+    !!betType &&
+    !!selection &&
+    typeof stakeAmount === "number" &&
+    stakeAmount > 0 &&
+    player.inGameBalance >= stakeAmount;
+
+  if (!validBet) {
     const fee = decision.landingFee ?? 0;
     player.inGameBalance -= fee;
     owner.inGameBalance += fee;
     log(state, playerId, "pay_landing_fee", `${player.username} paid a $${fee} landing fee at ${tile.name}.`);
-  } else if (betType && stakeAmount && stakeAmount > 0 && player.inGameBalance >= stakeAmount) {
-    const multiplier = BET_MULTIPLIERS[betType];
-    const rake = Math.round(stakeAmount * BET_RAKE_PERCENT);
-    player.inGameBalance -= rake;
-    owner.inGameBalance += rake;
-
-    const won = Math.random() < BET_WIN_PROBABILITY[betType];
-    let payoutAmount = 0;
-
-    if (won) {
-      payoutAmount = stakeAmount * multiplier;
-      owner.inGameBalance -= payoutAmount;
-      player.inGameBalance += payoutAmount;
-      if (owner.inGameBalance < 0) {
-        const shortfall = -owner.inGameBalance;
-        owner.inGameBalance = 0;
-        owner.loans.push(forcedLoan(state, shortfall));
-        log(state, ownerId, "take_loan", `${owner.username} couldn't cover a payout and took an emergency loan of $${shortfall}.`);
-      }
-      log(state, playerId, "bet", `${player.username} won a ${betType} bet at ${tile.name} — $${payoutAmount} from ${owner.username}.`);
-    } else {
-      owner.inGameBalance += stakeAmount;
-      player.inGameBalance -= stakeAmount;
-      log(state, playerId, "bet", `${player.username} lost a ${betType} bet at ${tile.name} — $${stakeAmount} to ${owner.username}.`);
-    }
-
-    const bet: BetRecord = {
-      id: id("bet"),
-      tileId: tile.id,
-      bettorPlayerId: playerId,
-      ownerPlayerId: ownerId,
-      betType,
-      betAmount: stakeAmount,
-      multiplier,
-      result: won ? "win" : "lose",
-      payoutAmount,
-      rakeAmount: rake,
-      turnNumber: state.turnNumber,
-    };
-    state.bets.push(bet);
-    if (state.bets.length > 50) state.bets.shift();
+    state.pendingDecision = null;
     refreshNetWorth(state, ownerId);
+    refreshNetWorth(state, playerId);
+    return state;
   }
+
+  const multiplier = BET_MULTIPLIERS[betType!];
+  const stake = stakeAmount!;
+
+  // Stake goes to the house up front — a loss simply keeps it there, a win pays
+  // back stake × multiplier (so the player nets (multiplier − 1) × stake).
+  player.inGameBalance -= stake;
+  owner.inGameBalance += stake;
+
+  const pocket = spinPocket();
+  const won = betWins(betType!, selection!, pocket);
+  let payoutAmount = 0;
+
+  if (won) {
+    payoutAmount = stake * multiplier;
+    owner.inGameBalance -= payoutAmount;
+    player.inGameBalance += payoutAmount;
+    if (owner.inGameBalance < 0) {
+      const shortfall = -owner.inGameBalance;
+      owner.inGameBalance = 0;
+      owner.loans.push(forcedLoan(state, shortfall));
+      log(state, ownerId, "take_loan", `${owner.username} couldn't cover a payout and took an emergency loan of $${shortfall}.`);
+    }
+    log(state, playerId, "bet", `${player.username} won a ${betType} bet (${selection}) at ${tile.name} — pocket ${pocket}, $${payoutAmount} from ${owner.username}.`);
+  } else {
+    log(state, playerId, "bet", `${player.username} lost a ${betType} bet (${selection}) at ${tile.name} — pocket ${pocket}, $${stake} to ${owner.username}.`);
+  }
+
+  const bet: BetRecord = {
+    id: id("bet"),
+    tileId: tile.id,
+    bettorPlayerId: playerId,
+    ownerPlayerId: ownerId,
+    betType: betType!,
+    selection: selection!,
+    betAmount: stake,
+    multiplier,
+    result: won ? "win" : "lose",
+    payoutAmount,
+    resultPocket: pocket,
+    turnNumber: state.turnNumber,
+  };
+  state.bets.push(bet);
+  if (state.bets.length > 50) state.bets.shift();
+  refreshNetWorth(state, ownerId);
 
   state.pendingDecision = null;
   refreshNetWorth(state, playerId);

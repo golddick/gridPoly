@@ -66,6 +66,11 @@ function fracFor(face: number): number {
   return (face - 0.5) / 6;
 }
 
+/** Returns the Math.random() fraction that makes spinPocket() land on the given pocket (0-36). */
+function randForPocket(pocket: number): number {
+  return (pocket + 0.5) / 37;
+}
+
 /** Queues up exact Math.random() return values for the duration of `fn`. */
 function withRandomQueue<T>(values: number[], fn: () => T): T {
   const queue = [...values];
@@ -454,7 +459,7 @@ describe("shared investments (tech/crypto/startup)", () => {
 });
 
 describe("betting company", () => {
-  it("pays the bettor and debits the owner on a win, and always collects rake", () => {
+  it("pays the bettor and debits the owner on a winning color bet", () => {
     let state = freshState({ startingCapital: 1000 }, 2);
     const [ownerId, bettorId] = state.playerOrder;
     const tileId = firstOwnableTileId(state, "betting");
@@ -464,13 +469,54 @@ describe("betting company", () => {
     const ownerBefore = state.players[ownerId].inGameBalance;
     const bettorBefore = state.players[bettorId].inGameBalance;
 
-    // BET_WIN_PROBABILITY.color ~ 0.46 -> random() below that wins.
-    state = withRandomQueue([0.01], () => resolveBetOrFee(state, bettorId, "bet", "color", 100));
+    // Pocket 1 is red, so a "red" color bet wins: stake back plus 2× (net +stake profit).
+    state = withRandomQueue([randForPocket(1)], () => resolveBetOrFee(state, bettorId, "bet", "color", "red", 100));
 
-    const rake = 5; // 5% of 100
-    const payout = 200; // 2x multiplier
-    expect(state.players[bettorId].inGameBalance).toBe(bettorBefore - rake + payout);
-    expect(state.players[ownerId].inGameBalance).toBe(ownerBefore + rake - payout);
+    const payout = 200; // 2× multiplier
+    expect(state.players[bettorId].inGameBalance).toBe(bettorBefore - 100 + payout);
+    expect(state.players[ownerId].inGameBalance).toBe(ownerBefore + 100 - payout);
+
+    const rec = state.bets[state.bets.length - 1];
+    expect(rec.result).toBe("win");
+    expect(rec.selection).toBe("red");
+    expect(rec.resultPocket).toBe(1);
+    expect(rec.payoutAmount).toBe(payout);
+  });
+
+  it("leaves the stake with the owner on a losing bet", () => {
+    let state = freshState({ startingCapital: 1000 }, 2);
+    const [ownerId, bettorId] = state.playerOrder;
+    const tileId = firstOwnableTileId(state, "betting");
+    state.tileMarket[tileId].ownerPlayerId = ownerId;
+    state.pendingDecision = { playerId: bettorId, tileId, kind: "bet_or_fee", price: 0, currentOwnerPlayerId: ownerId, landingFee: 10 };
+
+    const ownerBefore = state.players[ownerId].inGameBalance;
+    const bettorBefore = state.players[bettorId].inGameBalance;
+
+    // Pocket 0 is green, so the "red" color bet loses — the owner simply keeps the stake.
+    state = withRandomQueue([randForPocket(0)], () => resolveBetOrFee(state, bettorId, "bet", "color", "red", 100));
+
+    expect(state.players[bettorId].inGameBalance).toBe(bettorBefore - 100);
+    expect(state.players[ownerId].inGameBalance).toBe(ownerBefore + 100);
+    expect(state.bets[state.bets.length - 1].result).toBe("lose");
+  });
+
+  it("falls back to the flat landing fee when the bet is malformed or unfunded", () => {
+    let state = freshState({ startingCapital: 1000 }, 2);
+    const [ownerId, bettorId] = state.playerOrder;
+    const tileId = firstOwnableTileId(state, "betting");
+    state.tileMarket[tileId].ownerPlayerId = ownerId;
+    state.pendingDecision = { playerId: bettorId, tileId, kind: "bet_or_fee", price: 0, currentOwnerPlayerId: ownerId, landingFee: 10 };
+
+    const ownerBefore = state.players[ownerId].inGameBalance;
+    const bettorBefore = state.players[bettorId].inGameBalance;
+
+    // A "bet" with no selection is not a valid wager: charge the $10 landing fee instead.
+    state = resolveBetOrFee(state, bettorId, "bet", "color", undefined, 100);
+
+    expect(state.players[bettorId].inGameBalance).toBe(bettorBefore - 10);
+    expect(state.players[ownerId].inGameBalance).toBe(ownerBefore + 10);
+    expect(state.bets.length).toBe(0);
   });
 
   it("issues the owner an emergency loan when a payout exceeds their balance", () => {
@@ -481,7 +527,8 @@ describe("betting company", () => {
     state.tileMarket[tileId].ownerPlayerId = ownerId;
     state.pendingDecision = { playerId: bettorId, tileId, kind: "bet_or_fee", price: 0, currentOwnerPlayerId: ownerId, landingFee: 10 };
 
-    state = withRandomQueue([0.001], () => resolveBetOrFee(state, bettorId, "bet", "number", 100)); // 35x multiplier, guaranteed win
+    // Straight-up bet on 0, forced to land on 0: a 35× payout the owner can't cover.
+    state = withRandomQueue([randForPocket(0)], () => resolveBetOrFee(state, bettorId, "bet", "number", "0", 100));
 
     expect(state.players[ownerId].inGameBalance).toBe(0);
     expect(state.players[ownerId].loans.length).toBe(1);
@@ -854,7 +901,7 @@ describe("refreshWinCondition — catches a win outside of endTurn", () => {
     state.tileMarket[tileId].ownerPlayerId = ownerId;
     state.pendingDecision = { playerId: bettorId, tileId, kind: "bet_or_fee", price: 0, currentOwnerPlayerId: ownerId, landingFee: 10 };
 
-    state = withRandomQueue([0.001], () => resolveBetOrFee(state, bettorId, "bet", "number", 100)); // guaranteed win, refreshes netWorth internally
+    state = withRandomQueue([randForPocket(0)], () => resolveBetOrFee(state, bettorId, "bet", "number", "0", 100)); // guaranteed win, refreshes netWorth internally
     expect(state.status).toBe("in_progress"); // resolveBetOrFee itself doesn't check win conditions
 
     state = refreshWinCondition(state);

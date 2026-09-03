@@ -44,7 +44,7 @@ interface GameStore {
   buyDecision: (accept: boolean) => void;
   outbidDecision: (accept: boolean) => void;
   investDecision: (invest: boolean) => void;
-  betDecision: (choice: "bet" | "fee", betType?: BetType, stakeAmount?: number) => void;
+  betDecision: (choice: "bet" | "fee", betType?: BetType, selection?: string, stakeAmount?: number) => void;
   renewDecision: (renew: boolean) => void;
   takeLoan: (amount: number) => void;
   endTurn: () => void;
@@ -199,10 +199,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     getSocket().emit("game:investDecision", { roomId, playerId: myPlayerId, invest });
   },
 
-  betDecision: (choice, betType, stakeAmount) => {
+  betDecision: (choice, betType, selection, stakeAmount) => {
     const { roomId, myPlayerId } = get();
     if (!roomId || !myPlayerId) return;
-    getSocket().emit("game:betDecision", { roomId, playerId: myPlayerId, choice, betType, stakeAmount });
+    getSocket().emit("game:betDecision", { roomId, playerId: myPlayerId, choice, betType, selection, stakeAmount });
   },
 
   renewDecision: (renew) => {

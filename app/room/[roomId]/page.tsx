@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import HowToPlayButton from "@/components/HowToPlayButton";
@@ -15,20 +15,12 @@ import { useGridAuth } from "@/lib/auth";
 import { normalizeRoomCode } from "@/lib/roomCode";
 import { boardIndex } from "@/lib/game/board";
 import { getPlayerAssets, getColorGroupStatus } from "@/lib/game/engine";
-import { BET_MULTIPLIERS, type BetType, type BotDifficulty } from "@/lib/game/types";
+import { BET_MULTIPLIERS, type BetType, type BetRecord, type BotDifficulty } from "@/lib/game/types";
+import { pocketColor, RANGE_BAND_LABELS, type RangeBand } from "@/lib/game/roulette";
+import { TILE_TYPE_COLOR } from "@/lib/tileColors";
+import RouletteWheel from "@/components/RouletteWheel";
 
 const Board3D = dynamic(() => import("@/components/board/Board3D"), { ssr: false });
-
-const ASSET_DOT: Record<string, string> = {
-  property: "bg-primary",
-  estate: "bg-gold",
-  bond: "bg-primary-accent",
-  contract: "bg-gold",
-  betting: "bg-danger",
-  tech_company: "bg-volatile",
-  crypto: "bg-volatile",
-  startup: "bg-volatile",
-};
 
 export default function RoomPage({ params }: { params: { roomId: string } }) {
   const roomId = normalizeRoomCode(params.roomId);
@@ -77,6 +69,13 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null);
   const [betType, setBetType] = useState<BetType>("color");
   const [stakeInput, setStakeInput] = useState(100);
+  // Roulette selection is kept per bet type so switching type doesn't clobber a prior choice.
+  const [colorSel, setColorSel] = useState<"red" | "black">("red");
+  const [rangeSel, setRangeSel] = useState<RangeBand>("low");
+  const [numberSel, setNumberSel] = useState(0);
+  const [spinBet, setSpinBet] = useState<BetRecord | null>(null);
+  const [spinSettled, setSpinSettled] = useState(false);
+  const seenBetIdRef = useRef<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   const [tradeOpen, setTradeOpen] = useState(false);
   const [listPriceInput, setListPriceInput] = useState<Record<string, number>>({});
@@ -125,6 +124,23 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 
   const latestIncomingChat = [...chatMessages].reverse().find((m) => m.toPlayerId === myPlayerId && m.fromPlayerId !== myPlayerId) ?? null;
   const showChatNotice = Boolean(latestIncomingChat && latestIncomingChat.id !== dismissedChatNoticeId && !chatOpen);
+
+  // Watch the shared bet log: when a new spin resolves that involves me (as
+  // bettor or as the house) — or any spin, if I'm spectating — replay it on the
+  // wheel. The landed pocket is authoritative, so every client shows the same result.
+  useEffect(() => {
+    const bets = game?.bets;
+    if (!bets || bets.length === 0) return;
+    const latest = bets[bets.length - 1];
+    const prevSeen = seenBetIdRef.current;
+    seenBetIdRef.current = latest.id;
+    if (prevSeen === null || latest.id === prevSeen) return; // first sync — don't replay history
+    const involved = !myPlayerId || latest.bettorPlayerId === myPlayerId || latest.ownerPlayerId === myPlayerId;
+    if (involved) {
+      setSpinBet(latest);
+      setSpinSettled(false);
+    }
+  }, [game?.bets, myPlayerId]);
 
   if (authLoading || !userId) {
     return (
@@ -497,7 +513,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
                   <li key={a.tileId} className="rounded-lg border border-white/10 p-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex items-center gap-2 text-cream/80">
-                        <span className={`h-2 w-2 rounded-full ${ASSET_DOT[a.type]}`} />
+                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: TILE_TYPE_COLOR[a.type] }} />
                         {a.name}
                         {!a.isSingleOwner && <span className="text-cream/40">({Math.round(a.ownershipPercent)}%)</span>}
                         {a.mortgaged && <span className="text-[10px] uppercase text-danger">Mortgaged</span>}
@@ -720,30 +736,136 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
 
       <Modal open={Boolean(pendingIsMine && pending?.kind === "bet_or_fee")} onClose={() => betDecision("fee")} title={pendingTile ? `${pendingTile.name}` : "Betting Company"}>
         <p className="mb-4">
-          Owned by <span className="text-gold-highlight">{pending?.currentOwnerPlayerId ? game.players[pending.currentOwnerPlayerId]?.username : ""}</span>. Place a bet, or pay a{" "}
+          Owned by <span className="text-gold-highlight">{pending?.currentOwnerPlayerId ? game.players[pending.currentOwnerPlayerId]?.username : ""}</span>. Bet against the house on the wheel, or pay a{" "}
           <span className="text-gold-highlight">${pending?.landingFee}</span> landing fee to skip it.
         </p>
-        <div className="space-y-3">
-          <div className="flex gap-2">
-            {(Object.keys(BET_MULTIPLIERS) as BetType[]).map((t) => (
-              <button key={t} onClick={() => setBetType(t)} className={`flex-1 rounded-lg border px-2 py-2 text-xs capitalize ${betType === t ? "border-gold bg-gold/10 text-gold-highlight" : "border-white/10 text-cream/60"}`}>
-                {t} ({BET_MULTIPLIERS[t]}×)
-              </button>
-            ))}
+        <div className="space-y-4">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-cream/50">Bet type</label>
+            <div className="flex gap-2">
+              {(Object.keys(BET_MULTIPLIERS) as BetType[]).map((t) => (
+                <button key={t} onClick={() => setBetType(t)} className={`flex-1 rounded-lg border px-2 py-2 text-xs capitalize ${betType === t ? "border-gold bg-gold/10 text-gold-highlight" : "border-white/10 text-cream/60"}`}>
+                  {t} ({BET_MULTIPLIERS[t]}×)
+                </button>
+              ))}
+            </div>
           </div>
           <div>
-            <label className="block text-xs uppercase tracking-wide text-cream/50">Stake</label>
-            <input type="number" value={stakeInput} onChange={(e) => setStakeInput(Number(e.target.value))} className="mt-1 w-full rounded-lg border border-white/10 bg-base px-3 py-2 text-sm text-cream" />
+            <label className="mb-1 block text-xs uppercase tracking-wide text-cream/50">
+              Pick your {betType === "number" ? "number (0–36)" : betType === "range" ? "range" : "color"}
+            </label>
+            {betType === "color" && (
+              <div className="flex gap-2">
+                {(["red", "black"] as const).map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setColorSel(c)}
+                    className={`flex flex-1 items-center justify-center gap-2 rounded-lg border px-2 py-2 text-xs capitalize ${colorSel === c ? "border-gold bg-gold/10 text-gold-highlight" : "border-white/10 text-cream/60"}`}
+                  >
+                    <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c === "red" ? "#C13A3A" : "#1A1D22", outline: "1px solid rgba(255,255,255,0.25)" }} />
+                    {c}
+                  </button>
+                ))}
+              </div>
+            )}
+            {betType === "range" && (
+              <div className="flex gap-2">
+                {(Object.keys(RANGE_BAND_LABELS) as RangeBand[]).map((b) => (
+                  <button key={b} onClick={() => setRangeSel(b)} className={`flex-1 rounded-lg border px-2 py-2 text-xs ${rangeSel === b ? "border-gold bg-gold/10 text-gold-highlight" : "border-white/10 text-cream/60"}`}>
+                    {RANGE_BAND_LABELS[b]}
+                  </button>
+                ))}
+              </div>
+            )}
+            {betType === "number" && (
+              <input
+                type="number"
+                min={0}
+                max={36}
+                value={numberSel}
+                onChange={(e) => setNumberSel(Math.max(0, Math.min(36, Math.floor(Number(e.target.value)) || 0)))}
+                className="w-full rounded-lg border border-white/10 bg-base px-3 py-2 text-sm text-cream"
+              />
+            )}
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-cream/50">Stake</label>
+            <input type="number" min={1} value={stakeInput} onChange={(e) => setStakeInput(Number(e.target.value))} className="w-full rounded-lg border border-white/10 bg-base px-3 py-2 text-sm text-cream" />
+            <p className="mt-1 text-xs text-cream/40">
+              Your balance: <span className="text-cream/70">${me?.inGameBalance ?? 0}</span>
+            </p>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-base/60 px-3 py-2 text-xs text-cream/60">
+            Win pays <span className="text-emerald-400">+${Math.max(0, stakeInput) * (BET_MULTIPLIERS[betType] - 1)}</span> · lose costs{" "}
+            <span className="text-danger">−${Math.max(0, stakeInput)}</span>
           </div>
         </div>
         <div className="mt-6 flex gap-3">
-          <button onClick={() => betDecision("bet", betType, stakeInput)} className="flex-1 rounded-full bg-gold py-2.5 text-sm font-semibold text-base hover:bg-gold-highlight">
+          <button
+            onClick={() => betDecision("bet", betType, betType === "color" ? colorSel : betType === "range" ? rangeSel : String(numberSel), stakeInput)}
+            disabled={!(stakeInput > 0 && !!me && stakeInput <= me.inGameBalance)}
+            className="flex-1 rounded-full bg-gold py-2.5 text-sm font-semibold text-base hover:bg-gold-highlight disabled:cursor-not-allowed disabled:opacity-40"
+          >
             Place bet
           </button>
           <button onClick={() => betDecision("fee")} className="flex-1 rounded-full border border-cream/25 py-2.5 text-sm text-cream hover:border-cream/50">
             Pay fee
           </button>
         </div>
+      </Modal>
+
+      <Modal open={Boolean(spinBet)} size="xl" onClose={() => setSpinBet(null)} title="Betting Company — the wheel">
+        {spinBet && (
+          <div className="flex flex-col items-center gap-4">
+            <RouletteWheel key={spinBet.id} resultPocket={spinBet.resultPocket} onSettled={() => setSpinSettled(true)} />
+            {spinSettled ? (
+              <div className="w-full text-center">
+                <p className="text-sm text-cream/60">
+                  Landed on <span className="font-semibold text-cream">{spinBet.resultPocket}</span>{" "}
+                  <span
+                    className="font-semibold capitalize"
+                    style={{ color: pocketColor(spinBet.resultPocket) === "red" ? "#E15B5B" : pocketColor(spinBet.resultPocket) === "black" ? "#9AA0A6" : "#2BC47A" }}
+                  >
+                    {pocketColor(spinBet.resultPocket)}
+                  </span>
+                </p>
+                {(() => {
+                  const iAmBettor = spinBet.bettorPlayerId === myPlayerId;
+                  const iAmOwner = spinBet.ownerPlayerId === myPlayerId;
+                  const bettorName = game.players[spinBet.bettorPlayerId]?.username ?? "Player";
+                  const won = spinBet.result === "win";
+                  const netProfit = spinBet.payoutAmount - spinBet.betAmount;
+                  let headline: string;
+                  let tone: string;
+                  if (iAmBettor) {
+                    headline = won ? `You won +$${netProfit}!` : `You lost $${spinBet.betAmount}.`;
+                    tone = won ? "text-emerald-400" : "text-danger";
+                  } else if (iAmOwner) {
+                    headline = won ? `${bettorName} won — you paid out $${spinBet.payoutAmount}.` : `${bettorName} lost — you keep $${spinBet.betAmount}.`;
+                    tone = won ? "text-danger" : "text-emerald-400";
+                  } else {
+                    headline = won ? `${bettorName} won $${netProfit}.` : `${bettorName} lost $${spinBet.betAmount}.`;
+                    tone = "text-cream";
+                  }
+                  const selectionLabel = spinBet.betType === "range" ? RANGE_BAND_LABELS[spinBet.selection as RangeBand] : spinBet.selection;
+                  return (
+                    <>
+                      <p className={`mt-2 font-display text-xl ${tone}`}>{headline}</p>
+                      <p className="mt-1 text-xs capitalize text-cream/40">
+                        {spinBet.betType} bet on {selectionLabel} · {spinBet.multiplier}×
+                      </p>
+                    </>
+                  );
+                })()}
+                <button onClick={() => setSpinBet(null)} className="mt-5 rounded-full bg-gold px-8 py-2.5 text-sm font-semibold text-base hover:bg-gold-highlight">
+                  Done
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-cream/50">Spinning…</p>
+            )}
+          </div>
+        )}
       </Modal>
 
       <Modal open={Boolean(pendingIsMine && pending?.kind === "renew_or_release")} onClose={() => renewDecision(false)} title={pendingTile ? `${pendingTile.name} is expiring` : "Contract expiring"}>
@@ -852,7 +974,7 @@ export default function RoomPage({ params }: { params: { roomId: string } }) {
                   assets.map((a) => (
                     <li key={a.tileId} className="flex items-center justify-between gap-2 rounded-lg border border-white/10 p-2">
                       <span className="flex min-w-0 items-center gap-2 text-cream/80">
-                        <span className={`h-2 w-2 shrink-0 rounded-full ${ASSET_DOT[a.type]}`} />
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: TILE_TYPE_COLOR[a.type] }} />
                         <span className="truncate">{a.name}</span>
                         {a.buildLevel ? (
                           <span className="shrink-0 text-[10px] text-cream/50">{a.buildLevel >= 5 ? "🏨 Hotel" : `🏠×${a.buildLevel}`}</span>
